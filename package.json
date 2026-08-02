@@ -1,0 +1,18 @@
+{
+  "name": "smm-bot-cpanel-final",
+  "version": "6.0.0",
+  "description": "Final SMM Panel Bot - Telebothost NOT USED, Only cPanel bot.totocompamy.com - All Features - INR to BDT/USD Hidden Rates - Force Join 3 Groups - NagrikPay Only - Manual Orders - Group Masked IDs",
+  "main": "bot.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.61.0",
+    "axios": "^1.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  }
+}
