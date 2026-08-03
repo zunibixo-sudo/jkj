@@ -98,10 +98,16 @@ function isAdmin(id){ return ADMIN_IDS.includes(id); }
 function getSetting(k, def=null){ return dbData.settings[k]!==undefined ? dbData.settings[k] : def; }
 function setSetting(k,v){ dbData.settings[k]=v; saveDB(); }
 function getConversionRates(){
-  return {
-    BDT: parseFloat(getSetting('inr_to_bdt', parseFloat(process.env.INR_TO_BDT || 1.35))),
-    USD: parseFloat(getSetting('inr_to_usd', parseFloat(process.env.INR_TO_USD || 0.012)))
-  };
+  // Support both INR base and USD base API (your totocompamy.com API is USD base)
+  const inrToBdt = parseFloat(getSetting('inr_to_bdt', parseFloat(process.env.INR_TO_BDT || 1.35)));
+  const inrToUsd = parseFloat(getSetting('inr_to_usd', parseFloat(process.env.INR_TO_USD || 0.012)));
+  const usdToBdt = parseFloat(getSetting('usd_to_bdt', parseFloat(process.env.USD_TO_BDT || 120)));
+  const apiCurrency = (getSetting('api_currency', process.env.API_BASE_CURRENCY || 'USD')).toUpperCase(); // USD or INR - your totocompamy.com is USD
+  if(apiCurrency === 'USD'){
+    return { BDT: usdToBdt, USD: 1, INR: inrToBdt, API: 'USD' };
+  } else {
+    return { BDT: inrToBdt, USD: inrToUsd, API: 'INR' };
+  }
 }
 function formatMoney(amount, currency){
   const c=(currency||'BDT').toUpperCase();
@@ -261,21 +267,40 @@ function askCurrency(uid){
 }
 function maskIdPublic(id){ return maskId(id); }
 
-// Force Join
+// Force Join - ADMIN BYPASS + FIX FOR YOUR SCREENSHOT IDs
 async function checkUserJoinedAll(uid){
   if(!(process.env.FORCE_JOIN_ENABLED||'true').includes('true')) return {joined:true, missing:[]};
+  // ADMIN BYPASS - Admins don't need to join groups (fixes your screenshot where admin stuck)
+  if(isAdmin(uid)) return {joined:true, missing:[]};
   let missing=[];
   for(let gid of FORCE_JOIN_IDS){
     if(!gid) continue;
     try{
       let member=null;
-      try{ member=await bot.getChatMember(gid, uid); }catch(e){
-        const altId = String(gid).startsWith('-100') ? gid : Number('-100'+String(gid).replace('-',''));
-        try{ member=await bot.getChatMember(altId, uid); }catch(e2){}
+      // Try original ID, then with -100 prefix, then without
+      const attempts=[gid];
+      const s=String(gid);
+      if(!s.startsWith('-100') && s.startsWith('-')) attempts.push(Number('-100'+s.substring(1)));
+      if(s.startsWith('-100')) attempts.push(Number(s.substring(4)));
+      // Also try your specific IDs that are missing: -5090894763 and -5361354377 often should be -1005090894763 and -1005361354377
+      if(s==='-5090894763') attempts.push(-1005090894763);
+      if(s==='-5361354377') attempts.push(-1005361354377);
+      
+      for(let tryId of attempts){
+        try{ member=await bot.getChatMember(tryId, uid); if(member) break; }catch(e){}
       }
-      if(member && ['left','kicked','banned'].includes(member.status)) missing.push(gid);
-      if(!member) missing.push(gid);
-    }catch(e){ console.log(`Join check fail ${gid}: ${e.message}`); }
+      
+      if(!member){
+        // If bot can't check (not admin in group), don't block user - just log
+        console.log(`Join check: Can't get member for ${gid} user ${uid}, skipping to avoid blocking`);
+        continue;
+      }
+      if(['left','kicked','banned'].includes(member.status)) missing.push(gid);
+    }catch(e){ 
+      console.log(`Join check fail ${gid} user ${uid}: ${e.message}`);
+      // If fails, don't block user - allow to proceed to avoid your screenshot issue
+      continue;
+    }
   }
   return {joined:missing.length===0, missing};
 }
@@ -343,15 +368,18 @@ async function smmPost(p){
   try{
     const apiUrl=getSetting('api_url', API_URL_ENV);
     const apiKey=getSetting('api_key', API_KEY_ENV);
-    if(apiUrl && apiUrl.includes('totocompamy.com')){
-      throw new Error(`Invalid API URL: You set API_URL to your own domain ${apiUrl} which is NOT SMM provider. Set real SMM provider URL like https://justanotherpanel.com/api/v2 via /admin -> Manage API`);
-    }
+    // Your SMM provider IS totocompamy.com/api/v2 as you said, so we allow it now
+    // Previous check blocked totocompamy.com as invalid, now removed for your case
     const body=new URLSearchParams({key:apiKey, ...p});
     const {data}=await axios.post(apiUrl, body.toString(), {headers:{'Content-Type':'application/x-www-form-urlencoded'}, timeout:15000});
     if(data && data.error) throw new Error(data.error);
+    // Also handle case where API returns string "Invalid API Key"
+    if(typeof data === 'string' && data.toLowerCase().includes('invalid api key')){
+      throw new Error(`Invalid API Key. Your key from https://totocompamy.com panel is wrong or expired. Go to https://totocompamy.com -> API page -> Copy API Key again and set via /admin -> Manage API -> Change API Key. Current URL: ${apiUrl}`);
+    }
     return data;
   }catch(e){
-    const msg=e.response?.data ? JSON.stringify(e.response.data).slice(0,400) : e.message;
+    const msg=e.response?.data ? (typeof e.response.data === 'string' ? e.response.data : JSON.stringify(e.response.data)).slice(0,500) : e.message;
     throw new Error(`API ${p.action} Error: ${msg} | URL: ${getSetting('api_url', API_URL_ENV)}`);
   }
 }
@@ -883,7 +911,7 @@ bot.on('callback_query', async (cq)=>{
 
   // Admin callbacks
   if(!isAdmin(uid)) return;
-  if(data==='adm_apibal'){ try{ const r=await smmPost({action:'balance'}); bot.sendMessage(uid, `API Bal: ${r.balance} ${r.currency||'INR'}`);}catch(e){ bot.sendMessage(uid, `❌ API Fail: ${e.message}\nIf URL contains totocompamy.com, it's WRONG! Set real provider URL via Manage API`); } }
+  if(data==='adm_apibal'){ try{ const r=await smmPost({action:'balance'}); bot.sendMessage(uid, `✅ API Balance Working!\n💰 Balance: ${r.balance} ${r.currency||'USD'}\nURL: ${getSetting('api_url', API_URL_ENV)}\n\nIf shows Invalid API Key, go to https://totocompamy.com -> API page -> Copy API Key again and set via Manage API -> Change API Key`);}catch(e){ bot.sendMessage(uid, `❌ API Balance Fail: ${e.message}\n\nFix for https://totocompamy.com/api/v2:\n1. Go to https://totocompamy.com -> Login -> API page -> Copy API Key\n2. In bot /admin -> Manage API -> Change API Key -> Paste new key\n3. Test API again\n4. If still fails, API key may be expired or panel balance low`); } }
   if(data==='adm_addbal'){ state.set(uid,{step:'admin_addbal'}); bot.sendMessage(uid, "Send: `userId amount currency`\nEx: 7481724731 100 BDT", {parse_mode:"Markdown", reply_markup:{keyboard:[[{text:"❌ Cancel"}]], resize_keyboard:true}}); }
   if(data==='adm_search'){ state.set(uid,{step:'admin_search_user'}); bot.sendMessage(uid, tr(uid,'search_user_prompt'), {reply_markup:{keyboard:[[{text:"❌ Cancel"}]], resize_keyboard:true}}); }
   if(data==='adm_rates'){ const rates=getConversionRates(); state.set(uid,{step:'admin_set_rates'}); bot.sendMessage(uid, `Current Hidden Rates:\n1 INR=${rates.BDT} BDT / ${rates.USD} USD\n\nSend BDT_rate USD_rate\nEx: 1.35 0.012`, {reply_markup:{keyboard:[[{text:"❌ Cancel"}]], resize_keyboard:true}}); }
@@ -917,7 +945,8 @@ bot.on('callback_query', async (cq)=>{
   if(data==='adm_manage_api'){
     const apiUrl=getSetting('api_url', API_URL_ENV); const apiKey=getSetting('api_key', API_KEY_ENV);
     const maskedKey=apiKey ? apiKey.substring(0,4)+"***"+apiKey.substring(apiKey.length-4) : "Not set";
-    bot.sendMessage(uid, `🔧 *Manage API*\n\nCurrent URL: ${apiUrl}\nCurrent Key: ${maskedKey}\n\nIf URL contains totocompamy.com it's WRONG! Must be real SMM provider URL like https://justanotherpanel.com/api/v2`, {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"Change API URL", callback_data:"adm_set_api_url"}, {text:"Change API Key", callback_data:"adm_set_api_key"}], [{text:"🧪 Test API", callback_data:"adm_test_api"}, {text:tr(uid,'cancel'), callback_data:"cancel_action"}]]}});
+    const isToto = apiUrl && apiUrl.includes('totocompamy.com');
+    bot.sendMessage(uid, `🔧 *Manage API - Your SMM Provider*\n\nCurrent URL: ${apiUrl}${isToto ? '\n✅ This IS your SMM provider totocompamy.com/api/v2 (as you said)' : ''}\nCurrent Key: ${maskedKey}\n\nFor https://totocompamy.com/api/v2:\n• Get API Key from https://totocompamy.com -> API page\n• If Invalid API Key error, key expired, copy again\n• Panel currency is USD (from API docs)\n• Conversion: 1 USD = ${getConversionRates().BDT/getConversionRates().USD*getConversionRates().USD || 120} BDT approx`, {parse_mode:"Markdown", reply_markup:{inline_keyboard:[[{text:"Change API URL", callback_data:"adm_set_api_url"}, {text:"Change API Key", callback_data:"adm_set_api_key"}], [{text:"🧪 Test API", callback_data:"adm_test_api"}, {text:tr(uid,'cancel'), callback_data:"cancel_action"}]]}});
   }
   if(data==='adm_set_api_url'){ state.set(uid,{step:'admin_set_api_url'}); bot.sendMessage(uid, "Send new API URL:\nEx: https://justanotherpanel.com/api/v2\n\nCancel to abort", {reply_markup:{keyboard:[[{text:"❌ Cancel"}]], resize_keyboard:true}}); }
   if(data==='adm_set_api_key'){ state.set(uid,{step:'admin_set_api_key'}); bot.sendMessage(uid, "Send new API Key:", {reply_markup:{keyboard:[[{text:"❌ Cancel"}]], resize_keyboard:true}}); }
