@@ -1,7 +1,7 @@
 {
-  "name": "smm-bot-cpanel-final",
-  "version": "6.0.0",
-  "description": "Final SMM Panel Bot - Telebothost NOT USED, Only cPanel bot.totocompamy.com - All Features - INR to BDT/USD Hidden Rates - Force Join 3 Groups - NagrikPay Only - Manual Orders - Group Masked IDs",
+  "name": "toto-compamy-smm-final-v8-pro",
+  "version": "8.0.0",
+  "description": "TotoCompamysmm FINAL PRO - cPanel Only - No Terminal - Force Join 3 Groups + Manual Group - Auto/Manual/Search Flow - Group Masked IDs - NagrikPay + Manual Payment + Admin Checks - Professional Website Like",
   "main": "bot.js",
   "engines": {
     "node": ">=18.0.0"
